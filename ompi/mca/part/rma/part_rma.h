@@ -204,6 +204,89 @@ mca_part_rma_gcd(int a, int b)
     else                  return mca_part_rma_gcd(a, b-a);
 }
 
+
+// TODO we need a structure for the args here (perhaps the struct can be used for both directions. 
+typedef struct{
+    int this_rank;
+    int other_rank;
+    int count;
+    int parts;
+    int tag;
+    ompi_communicator_t* comm;
+    mca_part_rma_request_t* req;
+} mca_part_rma_precv_init_struct;
+
+
+/*
+ * This version of partitioned communication leverages a threading based 'work-around' 
+ * for partitioned communication's non-blocking initialization implementation.
+ * This function is meant to be called from a thread, allowing a the MPI call to return 
+ * control to the user. This is the 
+ */
+static void* mca_part_rma_precv_init_t(void* args)
+{
+    int ranks[2];
+    int err = MPI_SUCCESS; // TODO - we need logic for when any part of this fails.
+    int remote_part = 0;
+    int dt_size;
+    mca_part_rma_precv_init_struct* _args = (mca_part_rma_precv_init_struct*)args;
+
+    mca_part_rma_request_t* req = _args->req;
+    mca_part_rma_list_t* new_progress_elem = NULL;
+
+    ranks[0] = _args->other_rank; ranks[1] = _args->this_rank;
+    mca_part_rma_create_pcomm(_args->comm, 2, ranks, _args->tag, &req->req_window_comm);
+
+    err = MPI_Recv(&remote_part, 1, MPI_INT, 0, 0, req->req_window_comm, MPI_STATUS_IGNORE);
+    if(MPI_SUCCESS != err) return OMPI_ERROR;
+    err = MPI_Send(&_args->parts, 1, MPI_INT, 0, 0, req->req_window_comm);
+    if(MPI_SUCCESS != err) return OMPI_ERROR;
+
+    req->req_flags_size = mca_part_rma_gcd(_args->parts,remote_part);
+    req->req_counter_thresh = _args->parts / req->req_flags_size;
+
+    req->req_counters = (int*) malloc(sizeof(int)* req->req_flags_size);
+    req->req_flags  = (int*) malloc(sizeof(int)* req->req_flags_size);
+
+    err = MPI_Type_size(req->req_datatype, &dt_size);
+    if(MPI_SUCCESS != err) return OMPI_ERROR;
+    req->req_bytes = _args->parts * _args->count * dt_size;
+    err = MPI_Win_create((void*)(req->req_addr),
+                         _args->parts * _args->count * dt_size,
+                         dt_size,
+                         MPI_INFO_NULL,
+                         req->req_window_comm,
+                         &req->req_data_window);
+    if(MPI_SUCCESS != err) return OMPI_ERROR;
+
+    err = MPI_Win_lock_all(0, req->req_data_window);
+    if(MPI_SUCCESS != err) return OMPI_ERROR;
+
+    err = MPI_Win_create(req->req_flags,
+                         req->req_flags_size * sizeof(int),
+                         sizeof(int),
+                         MPI_INFO_NULL,
+                         req->req_window_comm,
+                         &req->req_flags_window);
+    if(MPI_SUCCESS != err) return OMPI_ERROR;
+
+    err = MPI_Win_lock_all(0, req->req_flags_window);
+    if(MPI_SUCCESS != err) return OMPI_ERROR;
+
+    new_progress_elem = OBJ_NEW(mca_part_rma_list_t);
+    new_progress_elem->item = req;
+    req->progress_elem = new_progress_elem;
+
+    // TODO - Add an initialized variable and set it to true here. 
+
+    OPAL_THREAD_LOCK(&ompi_part_rma.lock);
+    opal_list_append(ompi_part_rma.progress_list, (opal_list_item_t*)new_progress_elem);
+    OPAL_THREAD_UNLOCK(&ompi_part_rma.lock);
+
+    return 0;
+}
+
+
 __opal_attribute_always_inline__ static inline int
 mca_part_rma_precv_init(void *buf,
                         size_t parts, 
@@ -216,10 +299,6 @@ mca_part_rma_precv_init(void *buf,
 {
     int err = MPI_SUCCESS;
     int rank_super;
-    int ranks[2];
-    int remote_part = 0;
-    int dt_size;
-    mca_part_rma_list_t* new_progress_elem = NULL;
     mca_part_rma_precv_request_t *recvreq;
 
     /* Allocate a new request */
@@ -235,6 +314,24 @@ mca_part_rma_precv_init(void *buf,
     err = MPI_Comm_rank(comm, &rank_super);
     if(MPI_SUCCESS != err) return OMPI_ERROR; 
 
+    // TODO Set initialized variable to false.
+
+    // TODO Pack args
+
+    // TODO Create pthread
+    mca_part_rma_precv_init_t(0);
+
+
+    /* These are needed before the request is returned to the user*/
+    req->req_ompi.req_persistent = true;
+    req->req_part_complete = true;
+    req->req_ompi.req_complete = REQUEST_COMPLETED;
+    req->req_ompi.req_state = OMPI_REQUEST_INACTIVE;
+
+    *request = (ompi_request_t*) recvreq;
+
+
+#if 0
     ranks[0] = src; ranks[1] = rank_super;
     mca_part_rma_create_pcomm(comm, 2, ranks, tag, &req->req_window_comm);
 
@@ -288,8 +385,18 @@ mca_part_rma_precv_init(void *buf,
     OPAL_THREAD_LOCK(&ompi_part_rma.lock);
     opal_list_append(ompi_part_rma.progress_list, (opal_list_item_t*)new_progress_elem);
     OPAL_THREAD_UNLOCK(&ompi_part_rma.lock);
-
+#endif 
     return err;
+}
+
+/*
+ * This is a helper function for a thread
+ */
+static void* mca_part_rma_psend_init_t(void* args)
+{
+
+
+  return 0;
 }
 
 __opal_attribute_always_inline__ static inline int
