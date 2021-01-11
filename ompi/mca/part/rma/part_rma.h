@@ -278,10 +278,14 @@ static void* mca_part_rma_precv_init_t(void* args)
     req->progress_elem = new_progress_elem;
 
     // TODO - Add an initialized variable and set it to true here. 
+    req->initialized = true;
+    
 
     OPAL_THREAD_LOCK(&ompi_part_rma.lock);
     opal_list_append(ompi_part_rma.progress_list, (opal_list_item_t*)new_progress_elem);
     OPAL_THREAD_UNLOCK(&ompi_part_rma.lock);
+
+    free(args); 
 
     return 0;
 }
@@ -315,11 +319,26 @@ mca_part_rma_precv_init(void *buf,
     if(MPI_SUCCESS != err) return OMPI_ERROR; 
 
     // TODO Set initialized variable to false.
+    req->initialized = false;
+    req->first_send  = false; /* for a recv this shouln't matter */
+
 
     // TODO Pack args
+    mca_part_rma_precv_init_struct* args = (mca_part_rma_precv_init_struct*) malloc(sizeof(mca_part_rma_precv_init_struct));
+    args->this_rank = rank_super;
+    args->other_rank = src;
+    args->count = count;
+    args->parts = parts;
+    args->tag = tag;
+    args->comm = comm; 
+    args->req = req;
+
+
 
     // TODO Create pthread
-    mca_part_rma_precv_init_t(0);
+    pthread_t init_thread;
+    pthread_create(&init_thread, 0, mca_part_rma_precv_init_t, args);
+    //mca_part_rma_precv_init_t(args);
 
 
     /* These are needed before the request is returned to the user*/
