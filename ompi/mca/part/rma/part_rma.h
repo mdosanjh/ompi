@@ -413,9 +413,68 @@ mca_part_rma_precv_init(void *buf,
  */
 static void* mca_part_rma_psend_init_t(void* args)
 {
+    int ranks[2];
+    int err = MPI_SUCCESS; // TODO - we need logic for when any part of this fails.
+    int remote_part = 0;
+    int dt_size;
+    mca_part_rma_precv_init_struct* _args = (mca_part_rma_precv_init_struct*)args;
 
+    mca_part_rma_request_t* req = _args->req;
+    mca_part_rma_list_t* new_progress_elem = NULL;
 
-  return 0;
+    ranks[0] = _args->this_rank; ranks[1] = _args->other_rank;
+
+    mca_part_rma_create_pcomm(_args->comm, 2, ranks, _args->tag, &req->req_window_comm);
+
+    err = MPI_Send(&_args->parts, 1, MPI_INT, 1, 0, req->req_window_comm);
+    if(MPI_SUCCESS != err) return OMPI_ERROR;
+
+    err = MPI_Recv(&remote_part, 1, MPI_INT, 1, 0, req->req_window_comm, MPI_STATUS_IGNORE);
+    if(MPI_SUCCESS != err) return OMPI_ERROR;
+
+    req->req_flags_size = mca_part_rma_gcd(_args->parts,remote_part);
+    req->req_counter_thresh = _args->parts / req->req_flags_size;
+
+    req->req_counters = (int*) malloc(sizeof(int)* req->req_flags_size);
+    req->req_flags    = (int*) malloc(sizeof(int)* req->req_flags_size);
+
+    err = MPI_Type_size(req->req_datatype, &dt_size);
+    if(MPI_SUCCESS != err) return OMPI_ERROR;
+    req->req_bytes = _args->parts * _args->count * dt_size;
+
+    err = MPI_Win_create(0,
+                         0,
+                         dt_size,
+                         MPI_INFO_NULL,
+                         req->req_window_comm,
+                         &req->req_data_window);
+    if(MPI_SUCCESS != err) return OMPI_ERROR;
+
+    err = MPI_Win_lock_all(0, req->req_data_window);
+    if(MPI_SUCCESS != err) return OMPI_ERROR;
+
+    err = MPI_Win_create(0,
+                         0,
+                         sizeof(int),
+                         MPI_INFO_NULL,
+                         req->req_window_comm,
+                         &req->req_flags_window);
+    if(MPI_SUCCESS != err) return OMPI_ERROR;
+
+    err = MPI_Win_lock_all(0, req->req_flags_window);
+    if(MPI_SUCCESS != err) return OMPI_ERROR;
+
+    req->initialized = true;
+
+    new_progress_elem = OBJ_NEW(mca_part_rma_list_t);
+    new_progress_elem->item = req;
+    req->progress_elem = new_progress_elem;
+
+    OPAL_THREAD_LOCK(&ompi_part_rma.lock);
+    opal_list_append(ompi_part_rma.progress_list, (opal_list_item_t*)new_progress_elem);
+    OPAL_THREAD_UNLOCK(&ompi_part_rma.lock);
+
+    return 0;
 }
 
 __opal_attribute_always_inline__ static inline int
@@ -449,63 +508,34 @@ mca_part_rma_psend_init(const void* buf,
     err = MPI_Comm_rank(comm, &rank_super);
     if(MPI_SUCCESS != err) return OMPI_ERROR;
 
-    ranks[0] = rank_super; ranks[1] = dst;
-    mca_part_rma_create_pcomm(comm, 2, ranks, tag, &req->req_window_comm); 
+    // TODO Set initialized variable to false.
+    req->initialized = false;
+    req->first_send  = false; /* for a recv this shouln't matter */
 
-    err = MPI_Send(&parts, 1, MPI_INT, 1, 0, req->req_window_comm);
-    if(MPI_SUCCESS != err) return OMPI_ERROR;
 
-    err = MPI_Recv(&remote_part, 1, MPI_INT, 1, 0, req->req_window_comm, MPI_STATUS_IGNORE);
-    if(MPI_SUCCESS != err) return OMPI_ERROR;
+    // TODO Pack args
+    mca_part_rma_precv_init_struct* args = (mca_part_rma_precv_init_struct*) malloc(sizeof(mca_part_rma_precv_init_struct));
+    args->this_rank = rank_super;
+    args->other_rank = dst;
+    args->count = count;
+    args->parts = parts;
+    args->tag = tag;
+    args->comm = comm;
+    args->req = req;
 
-    req->req_flags_size = mca_part_rma_gcd(parts,remote_part);
-    req->req_counter_thresh = parts / req->req_flags_size;
 
-    req->req_counters = (int*) malloc(sizeof(int)* req->req_flags_size);
-    req->req_flags    = (int*) malloc(sizeof(int)* req->req_flags_size);
 
-    err = MPI_Type_size(req->req_datatype, &dt_size);
-    if(MPI_SUCCESS != err) return OMPI_ERROR;
-    req->req_bytes = parts * count * dt_size;
-
-    err = MPI_Win_create(0,
-                         0,
-                         dt_size,
-                         MPI_INFO_NULL,
-                         req->req_window_comm,
-                         &req->req_data_window);
-    if(MPI_SUCCESS != err) return OMPI_ERROR;
-
-    err = MPI_Win_lock_all(0, req->req_data_window);
-    if(MPI_SUCCESS != err) return OMPI_ERROR;
-
-    err = MPI_Win_create(0,
-                         0,
-                         sizeof(int),
-                         MPI_INFO_NULL,
-                         req->req_window_comm,
-                         &req->req_flags_window);
-    if(MPI_SUCCESS != err) return OMPI_ERROR;
-
-    err = MPI_Win_lock_all(0, req->req_flags_window);
-    if(MPI_SUCCESS != err) return OMPI_ERROR;
-
-    new_progress_elem = OBJ_NEW(mca_part_rma_list_t);
-    new_progress_elem->item = req;
-    req->progress_elem = new_progress_elem; 
+    // TODO Create pthread
+    pthread_t init_thread;
+    pthread_create(&init_thread, 0, mca_part_rma_psend_init_t, args);
 
     sendreq->req_base.req_ompi.req_persistent = true;
-
-
     req->req_part_complete = true;
     req->req_ompi.req_complete = REQUEST_COMPLETED;
     req->req_ompi.req_state = OMPI_REQUEST_INACTIVE;
 
     *request = (ompi_request_t*) sendreq;
 
-    OPAL_THREAD_LOCK(&ompi_part_rma.lock);
-    opal_list_append(ompi_part_rma.progress_list, (opal_list_item_t*)new_progress_elem);
-    OPAL_THREAD_UNLOCK(&ompi_part_rma.lock);
 
     return err;
 }

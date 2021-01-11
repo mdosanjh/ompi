@@ -73,6 +73,9 @@ struct mca_part_rma_request_t {
     volatile int32_t *req_counters; /**< counters for local partitions (should be size of 'req_flags_size') */
     int32_t *req_flags; /**< completion flags to transfer (should be size of 'req_flags_size') */
 
+    int initialized; /**< flag for initialized state */
+    int first_send;  /**< flag for whether the first send has happend */
+
     struct mca_part_rma_list_t* progress_elem; /**< pointer to progress list element for removal durring free. */ 
 
 };
