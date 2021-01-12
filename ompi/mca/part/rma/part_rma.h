@@ -104,12 +104,23 @@ mca_part_rma_free_req(struct mca_part_rma_request_t* req)
 __opal_attribute_always_inline__ static inline int
 mca_part_rma_test(struct mca_part_rma_request_t* request)
 {
+    mca_part_rma_request_t* req = request;
+
     int finished = 1;
     int i;
     for(i = 0; i < request->req_flags_size; i++) {
         finished = request->req_flags[i] && finished;
     }
     if(1 == finished) {
+        /* Lazy init support; if this is the first send, do a single put of all of the data. */ 
+        if(request->first_send)
+        {
+            request->first_send = false;
+            head = ((char*)req->req_addr);
+            err = MPI_Put(head, req->req_count * req->parts, req->req_datatype, receiver,
+                          0, req->req_count * req->parts, req->req_datatype, req->req_data_window);
+            if(MPI_SUCCESS != err) return OMPI_ERROR;
+        }
         if(MCA_PART_RMA_REQUEST_PRECV == request->req_type) {
             request->req_ompi.req_status.MPI_SOURCE = request->req_peer; 
         } else {
@@ -510,7 +521,7 @@ mca_part_rma_psend_init(const void* buf,
 
     // TODO Set initialized variable to false.
     req->initialized = false;
-    req->first_send  = false; /* for a recv this shouln't matter */
+    req->first_send  = true; 
 
 
     // TODO Pack args
@@ -587,12 +598,15 @@ mca_part_rma_pready(size_t min_part,
         err = MPI_Type_size(req->req_datatype, &datatype_size);
         if(MPI_SUCCESS != err) return OMPI_ERROR;
 
-        displacement = i * req->req_count;
-        head = ((char*)req->req_addr)+(displacement * datatype_size);
-        err = MPI_Put(head, req->req_count, req->req_datatype, receiver,
-                     displacement, req->req_count, req->req_datatype, req->req_data_window);
-        if(MPI_SUCCESS != err) return OMPI_ERROR;
-
+        /* Lazy initialization support, if this is the first use of this requests, we punt on anything related to till the message is complete and the request is initialized */
+        if(!req->first_send)
+        {
+            displacement = i * req->req_count;
+            head = ((char*)req->req_addr)+(displacement * datatype_size);
+            err = MPI_Put(head, req->req_count, req->req_datatype, receiver,
+                          displacement, req->req_count, req->req_datatype, req->req_data_window);
+            if(MPI_SUCCESS != err) return OMPI_ERROR;
+        }
         bin = i / req->req_counter_thresh;
         current_bin_size = opal_atomic_add_fetch_32(&(req->req_flags[bin]), 1);
 
@@ -641,6 +655,8 @@ __opal_attribute_always_inline__ static inline int
 mca_part_rma_free(ompi_request_t** request)
 {
     mca_part_rma_request_t* req = *(mca_part_rma_request_t**)request;
+
+    if(req->initialized == false) return OMPI_ERROR; // TODO Should this just block? or punt on freeing the request?
 
     if(true == req->req_free_called) return OMPI_ERROR;
     req->req_free_called = true;
