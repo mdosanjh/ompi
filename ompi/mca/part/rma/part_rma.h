@@ -105,8 +105,9 @@ __opal_attribute_always_inline__ static inline int
 mca_part_rma_test(struct mca_part_rma_request_t* request)
 {
     mca_part_rma_request_t* req = request;
-
+    int err = MPI_SUCCESS;
     int finished = 1;
+    int receiver = 1;
     int i;
     for(i = 0; i < request->req_flags_size; i++) {
         finished = request->req_flags[i] && finished;
@@ -116,9 +117,9 @@ mca_part_rma_test(struct mca_part_rma_request_t* request)
         if(request->first_send)
         {
             request->first_send = false;
-            head = ((char*)req->req_addr);
-            err = MPI_Put(head, req->req_count * req->parts, req->req_datatype, receiver,
-                          0, req->req_count * req->parts, req->req_datatype, req->req_data_window);
+            void* head = ((char*)req->req_addr);
+            err = MPI_Put(head, req->req_count * req->req_parts, req->req_datatype, receiver,
+                          0, req->req_count * req->req_parts, req->req_datatype, req->req_data_window);
             if(MPI_SUCCESS != err) return OMPI_ERROR;
         }
         if(MCA_PART_RMA_REQUEST_PRECV == request->req_type) {
