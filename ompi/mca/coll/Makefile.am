@@ -34,6 +34,7 @@ nobase_ompi_HEADERS = $(headers)
 endif
 
 include base/Makefile.am
+include earlybird/Makefile.am
 
 distclean-local:
 	rm -f base/static-components.h
