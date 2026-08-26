@@ -1,19 +1,33 @@
 # EarlyBird Collective Component
 
-# Headers
-coll_earlybird_la_ompi_headers = coll_earlybird.h
+sources =         coll_earlybird.h         coll_earlybird_utils.h         coll_earlybird_component.c         coll_earlybird_module.c         coll_earlybird_allgather.c         coll_earlybird_alltoall.c         coll_earlybird_bcast.c         coll_earlybird_gather.c         coll_earlybird_scatter.c         coll_earlybird_utils.c
 
-# Sources
-coll_earlybird_la_sources =     coll_earlybird_component.c     coll_earlybird_module.c     coll_earlybird_allgather.c
+# Make the output library in this directory, and name it either
+# mca_<type>_<name>.la (for DSO builds) or libmca_<type>_<name>.la
+# (for static builds).
 
-# Libraries
-coll_earlybird_la_libadd =     
+if MCA_BUILD_ompi_coll_earlybird_DSO
+component_noinst =
+component_install = mca_coll_earlybird.la
+else
+component_noinst = libmca_coll_earlybird.la
+component_install =
+endif
 
-# Include directories
-coll_earlybird_la_cppflags =     -I$(top_srcdir)/ompi/ompi/mca/coll/earlybird
+mcacomponentdir = $(ompilibdir)
+mcacomponent_LTLIBRARIES = $(component_install)
 
-# Create the library
-lib_LTLIBRARIES = coll_earlybird_la
+mca_coll_earlybird_la_SOURCES = $(sources)
+mca_coll_earlybird_la_LDFLAGS = -module -avoid-version
+mca_coll_earlybird_la_LIBADD = $(top_builddir)/ompi/libopen_mpi.la
 
-# Installation
-coll_earlybird_la_la_libs = 
+noinst_LTLIBRARIES = $(component_noinst)
+libmca_coll_earlybird_la_SOURCES = $(sources)
+libmca_coll_earlybird_la_LDFLAGS = -module -avoid-version
+libmca_coll_earlybird_la_LIBADD = $(top_builddir)/ompi/libopen_mpi.la
+
+# Header installation
+if WANT_INSTALL_HEADERS
+ompidir = $(ompiincludedir)/$(subdir)
+nobase_ompi_HEADERS = coll_earlybird.h
+endif
